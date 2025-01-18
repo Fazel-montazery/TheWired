@@ -10,7 +10,7 @@ main: ${src}
 	${cc} -o ${target} ${src} ${libs} ${flags} && strip ${target}
 
 server: server.c
-	gcc -o server server.c -O2 -Wall
+	gcc -o server.out server.c -O2 -Wall
 
 check:
 	  valgrind --leak-check=yes ./${target}
