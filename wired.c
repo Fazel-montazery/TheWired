@@ -38,21 +38,21 @@ typedef struct {
         char* recv_buffer;
 } State;
 
-static State state = { 0 };
+static State* stateForSignals = NULL;
 
-static void init();
-static void loop();
+static void init(State* state);
+static void loop(State* state);
 static void finish(int sig);
 static void resize(int sig);
 static void printLain(WINDOW* win);
-static void drawUI();
-static void deleteUi();
-static void createTextForm(WINDOW *win);
-static void drawHelp();
+static void drawUI(State* state);
+static void deleteUi(State* state);
+static void createTextForm(WINDOW *win, State* state);
+static void drawHelp(bool insertMode);
 static bool isValidNumber(const char *str);
 static unsigned short convertPort(const char *port_str);
-static void initConnection(const char* ip, unsigned short port, const char* name);
-static bool sendMsg(const char* format, ...);
+static void initConnection(const char* ip, unsigned short port, const char* name, State* state);
+static bool sendMsg(State* state, const char* format, ...);
 static void* handleConnection(void* vargp);
 
 static const short lain_art_w = 30;
@@ -90,18 +90,24 @@ int main(int argc, char *argv[])
                 exit(EXIT_FAILURE);
         }
 
-        initConnection(argv[1], convertPort(argv[2]), argv[3]);
-        pthread_create(&state.net_thread, NULL, handleConnection, NULL);
-        init();
-        loop();
+        State state = { 0 };
+        stateForSignals = &state;
+
+        initConnection(argv[1], convertPort(argv[2]), argv[3], &state);
+        if (pthread_create(&state.net_thread, NULL, handleConnection, &state) != 0) {
+                fprintf(stderr, RED "Error: Couldn't handle connection: pthread error\n" CRESET);
+                finish(0);
+        }
+        init(&state);
+        loop(&state);
         finish(0);
 }
 
-static void init()
+static void init(State* state)
 {
         ESCDELAY = 0; // No ESC delay
 
-        signal(SIGINT, finish); // Ctrl+c 
+        signal(SIGINT, finish); // Ctrl+C
         signal(SIGWINCH, resize); // Terminal resize
 
         setlocale(LC_ALL,""); // UTF-8
@@ -127,29 +133,29 @@ static void init()
                 init_pair(7, COLOR_WHITE,   COLOR_BLACK);
         }
 
-        drawUI();
+        drawUI(state);
 }
 
-static void loop()
+static void loop(State* state)
 {
         while (1) {
                 int ch = getch();
-                if (state.insertMode) {
+                if (state->insertMode) {
                         if (ch == 127 || ch == KEY_BACKSPACE) {
-                                form_driver(state.textForm, REQ_DEL_PREV);
+                                form_driver(state->textForm, REQ_DEL_PREV);
                         } else if (ch == 27) { // ESC
-                                state.insertMode = false;
-                                drawHelp();
+                                state->insertMode = false;
+                                drawHelp(state->insertMode);
                                 curs_set(FALSE);
                         } else {
-                                form_driver(state.textForm, ch);
+                                form_driver(state->textForm, ch);
                         }
                 } else {
                         if (ch == 'i' || ch == 'I') {
-                                state.insertMode = true;
-                                drawHelp();
-                                form_driver(state.textForm, REQ_NEXT_CHAR);
-                                form_driver(state.textForm, REQ_PREV_CHAR);
+                                state->insertMode = true;
+                                drawHelp(state->insertMode);
+                                form_driver(state->textForm, REQ_NEXT_CHAR);
+                                form_driver(state->textForm, REQ_PREV_CHAR);
                                 curs_set(TRUE);
                         } else if (ch == 'q' || ch == 'Q') {
                                 return; // End the program
@@ -160,10 +166,10 @@ static void loop()
 
 static void finish(int sig)
 {
-        if (state.send_buffer) free(state.send_buffer);
-        if (state.recv_buffer) free(state.recv_buffer);
-        close(state.socket);
-        deleteUi();
+        if (stateForSignals->send_buffer) free(stateForSignals->send_buffer);
+        if (stateForSignals->recv_buffer) free(stateForSignals->recv_buffer);
+        close(stateForSignals->socket);
+        deleteUi(stateForSignals);
         endwin();
         exit(EXIT_SUCCESS);
 }
@@ -171,14 +177,14 @@ static void finish(int sig)
 static void resize(int sig)
 {
         curs_set(FALSE);
-        state.insertMode = false;
+        stateForSignals->insertMode = false;
 
         endwin();            // End ncurses mode
         refresh();           // Refresh the screen
         clear();             // Clear the screen
 
-        deleteUi();
-        drawUI();
+        deleteUi(stateForSignals);
+        drawUI(stateForSignals);
 }
 
 static void printLain(WINDOW* win)
@@ -189,7 +195,7 @@ static void printLain(WINDOW* win)
         }
 }
 
-static void drawUI()
+static void drawUI(State* state)
 {
         int max_y_stdscr, max_x_stdscr;
         getmaxyx(stdscr, max_y_stdscr, max_x_stdscr);
@@ -202,7 +208,7 @@ static void drawUI()
         WINDOW* messageWin = newwin(max_y_stdscr - getmaxy(textWin) - 5, max_x_stdscr - lain_art_w - 6, 2, lain_art_w + 4);
 
         // TextField and Form
-        createTextForm(textWin);
+        createTextForm(textWin, state);
 
         // Stdscr
         box(stdscr, 0, 0);
@@ -228,43 +234,43 @@ static void drawUI()
         box(messageWin, 0, 0);
         wrefresh(messageWin);
 
-        drawHelp();
+        drawHelp(state->insertMode);
 
         // Setting states
-        state.lainWin = lainWin;
-        state.sideWin = sideWin;
-        state.mainWin = mainWin;
-        state.textWin = textWin;
-        state.messageWin = messageWin;
+        state->lainWin = lainWin;
+        state->sideWin = sideWin;
+        state->mainWin = mainWin;
+        state->textWin = textWin;
+        state->messageWin = messageWin;
 }
 
-static void deleteUi()
+static void deleteUi(State* state)
 {
-        delwin(state.lainWin);
-        delwin(state.sideWin);
-        delwin(state.mainWin);
-        delwin(state.textWin);
-        delwin(state.messageWin);
-        unpost_form(state.textForm);
-	free_form(state.textForm);
-	free_field(state.textField[0]);
+        delwin(state->lainWin);
+        delwin(state->sideWin);
+        delwin(state->mainWin);
+        delwin(state->textWin);
+        delwin(state->messageWin);
+        unpost_form(state->textForm);
+	free_form(state->textForm);
+	free_field(state->textField[0]);
 }
 
-static void createTextForm(WINDOW *win)
+static void createTextForm(WINDOW *win, State* state)
 {
         int start_x, start_y, x, y;
         getmaxyx(win, y, x);
         getbegyx(win, start_y, start_x);
 
-        state.textField[0] = new_field(y - 2, x - 2, start_y + 1, start_x + 1, 0, 0);
-        state.textField[1] = NULL;
-        field_opts_off(state.textField[0], O_AUTOSKIP);
-        state.textForm = new_form(state.textField);
-        post_form(state.textForm);
-        form_driver(state.textForm, REQ_INS_MODE);
+        state->textField[0] = new_field(y - 2, x - 2, start_y + 1, start_x + 1, 0, 0);
+        state->textField[1] = NULL;
+        field_opts_off(state->textField[0], O_AUTOSKIP);
+        state->textForm = new_form(state->textField);
+        post_form(state->textForm);
+        form_driver(state->textForm, REQ_INS_MODE);
 }
 
-static void drawHelp()
+static void drawHelp(bool insertMode)
 {
         int y = getmaxy(stdscr) - 2;
         for (int x = 1; x < getmaxx(stdscr) - 1; x++) {
@@ -272,7 +278,7 @@ static void drawHelp()
         }
 
         attron(COLOR_PAIR(4));
-        if (state.insertMode) {
+        if (insertMode) {
                 mvprintw(y, 2, "Enter: send message    Shift+Enter: newline    ESC: leave insert mode");
         } else {
                 mvprintw(y, 2, "i: enter insert mode    q: exit");
@@ -307,10 +313,10 @@ static unsigned short convertPort(const char *port_str)
         return (unsigned short)port;
 }
 
-static void initConnection(const char* ip, unsigned short port, const char* name)
+static void initConnection(const char* ip, unsigned short port, const char* name, State* state)
 {
-        state.socket = socket(AF_INET, SOCK_STREAM, 0);
-        if (state.socket == -1) {
+        state->socket = socket(AF_INET, SOCK_STREAM, 0);
+        if (state->socket == -1) {
                 fprintf(stderr, RED "Socket creation failed! errno: %s\n" CRESET, strerror(errno));
                 finish(0);
         }
@@ -325,22 +331,21 @@ static void initConnection(const char* ip, unsigned short port, const char* name
                 finish(0);
         }
 
-        if (connect(state.socket, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) == -1) {
+        if (connect(state->socket, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) == -1) {
                 fprintf(stderr, RED "Connection failed! errno: %s\n" CRESET, strerror(errno));
                 finish(0);
         }
 
-        state.send_buffer = malloc(MAX_BUFFER_SIZE);
-        state.recv_buffer = malloc(MAX_BUFFER_SIZE);
+        state->send_buffer = malloc(MAX_BUFFER_SIZE);
+        state->recv_buffer = malloc(MAX_BUFFER_SIZE);
 
-        if (!sendMsg(name)) {
-                close(state.socket);
+        if (!sendMsg(state, name)) {
                 fprintf(stderr, RED "Connection failed! errno: %s\n" CRESET, strerror(errno));
                 finish(0);
         }
 }
 
-static bool sendMsg(const char* format, ...)
+static bool sendMsg(State* state, const char* format, ...)
 {
         char buffer[MAX_BUFFER_SIZE] = { 0 };
 
@@ -349,19 +354,20 @@ static bool sendMsg(const char* format, ...)
         int written = vsnprintf(buffer, MAX_BUFFER_SIZE, format, args);
         va_end(args);
 
-        send(state.socket, buffer, written, 0);
+        send(state->socket, buffer, written, 0);
         return true;
 }
 
 static void* handleConnection(void* vargp)
 {
+        State* state = (State*) vargp;
         int rc;
 
         while (true) {
-                rc = recv(state.socket, state.recv_buffer, MAX_BUFFER_SIZE, 0);
+                rc = recv(state->socket, state->recv_buffer, MAX_BUFFER_SIZE, 0);
                 if (rc == 0) {
                         fprintf(stderr, RED "Connection closed!\n" CRESET);
-                        state.isNetThreadAlive = false;
+                        state->isNetThreadAlive = false;
                         finish(0);
                 }
 
