@@ -18,6 +18,8 @@
 #define MAX_BUFFER_SIZE 1024
 #define MAX_NAME_LEN 30
 
+#define SERVER_FULL_STRING "[SERVERISFULL]"
+
 typedef struct {
         // UI
         WINDOW *lainWin;
@@ -32,7 +34,6 @@ typedef struct {
 
         // NET
         pthread_t net_thread;
-        bool isNetThreadAlive;
         int socket;
         char* send_buffer;
         char* recv_buffer;
@@ -339,6 +340,11 @@ static void initConnection(const char* ip, unsigned short port, const char* name
         state->send_buffer = malloc(MAX_BUFFER_SIZE);
         state->recv_buffer = malloc(MAX_BUFFER_SIZE);
 
+        if (!state->send_buffer || !state->recv_buffer) {
+                fprintf(stderr, RED "Couldn't allocate recv or send buffer!\n" CRESET);
+                finish(0);
+        }
+
         if (!sendMsg(state, name)) {
                 fprintf(stderr, RED "Connection failed! errno: %s\n" CRESET, strerror(errno));
                 finish(0);
@@ -354,24 +360,43 @@ static bool sendMsg(State* state, const char* format, ...)
         int written = vsnprintf(buffer, MAX_BUFFER_SIZE, format, args);
         va_end(args);
 
-        send(state->socket, buffer, written, 0);
+        if (written >= MAX_BUFFER_SIZE) written -= 1;
+
+        int snd = send(state->socket, buffer, written, 0);
+        if (snd == -1) {
+                fprintf(stderr, RED "send error: %s\n" CRESET, strerror(errno));
+                return false;
+        }
         return true;
 }
 
 static void* handleConnection(void* vargp)
 {
         State* state = (State*) vargp;
+
+        char* buffer = state->recv_buffer;
+        int socket = state->socket;
+
         int rc;
 
         while (true) {
-                rc = recv(state->socket, state->recv_buffer, MAX_BUFFER_SIZE, 0);
+                rc = recv(socket, buffer, MAX_BUFFER_SIZE, 0);
                 if (rc == 0) {
                         fprintf(stderr, RED "Connection closed!\n" CRESET);
-                        state->isNetThreadAlive = false;
                         finish(0);
                 }
 
-                fprintf(stderr, GRN "%d bytes recived.\n" CRESET, rc);
+                if (rc == -1) {
+                        fprintf(stderr, RED "Error Reciving message: errno=>%s\n" CRESET, strerror(errno));
+                        finish(0);
+                }
+
+                buffer[rc] = '\0';
+
+                if (strcmp(buffer, SERVER_FULL_STRING) == 0) {
+                        fprintf(stderr, RED "Server is full!\n" CRESET);
+                        finish(0);
+                }
         }
 
         return NULL; //  Avoid warrning

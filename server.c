@@ -102,10 +102,12 @@ void printResult(Result s)
 } while(0)
 
 #define PORT 8080
-#define MAX_CLIENTS 2
+#define MAX_CLIENTS 1
 #define BACKLOG 10
 #define MAX_BUFFER_SIZE 1024
 #define MAX_NAME_LEN 30
+
+#define SERVER_FULL_STRING "[SERVERISFULL]"
 
 // Server
 static Result initServer(int* server_socket)
@@ -147,7 +149,7 @@ static Result initServer(int* server_socket)
         return SUCCESS;
 }
 
-static bool acceptConnection(int server_socket, struct pollfd* fds, int* nfds) // Return true if exit condition else false
+static bool acceptConnection(int server_socket, struct pollfd* fds, int* nfds) // Return false if exit condition else true
 {
         int new_socket;
         do {
@@ -159,6 +161,14 @@ static bool acceptConnection(int server_socket, struct pollfd* fds, int* nfds) /
                         break;
                 }
 
+                if (*nfds > MAX_CLIENTS) { // Server is full
+                        const char* msg = SERVER_FULL_STRING;
+                        send(new_socket, msg, strlen(msg), 0);
+                        close(new_socket);
+                        printError("Server is full!\n");
+                        return true;
+                }
+
                 char name[MAX_NAME_LEN + 1] = { 0 };
                 int rc = recv(new_socket, name, MAX_NAME_LEN, 0);
                 if (rc == -1) {
@@ -167,7 +177,7 @@ static bool acceptConnection(int server_socket, struct pollfd* fds, int* nfds) /
                 }
                 name[rc] = '\0';
 
-                printMsg("New connection socket %d with name %s\n", new_socket, name);
+                printMsg("New connection on socket %d with name %s\n", new_socket, name);
 
                 fds[*nfds].fd = new_socket;
                 fds[*nfds].events = POLLIN;
@@ -203,8 +213,9 @@ static bool handleConnection(int fd, char* buffer)
                 }
 
                 len = rc;
-                printMsg("  %d bytes received from connection %d\n", len, fd);
         } while (true);
+
+        buffer[len] = '\0';
 
         return true;
 }
