@@ -20,6 +20,48 @@
 
 #define SERVER_FULL_STRING "[SERVERISFULL]"
 
+// Messages
+typedef struct {
+        char* messages[MAX_MESSAGE_HISTORY];
+        int head;
+        int size;
+} Messages;
+
+static bool initMessages(Messages* msgs)
+{
+        msgs->head = 0;
+        msgs->size = 0;
+        for (int i = 0; i < MAX_MESSAGE_HISTORY; i++) {
+                msgs->messages[i] = malloc(MAX_BUFFER_SIZE);
+                if (!msgs->messages[i])
+                        return false;
+        }
+
+        return true;
+}
+
+static void destroyMessages(Messages* msgs)
+{
+        for (int i = 0; i < MAX_MESSAGE_HISTORY; i++) {
+                if (msgs->messages[i]) free(msgs->messages[i]);
+        }
+}
+
+static void addMessage(Messages* msgs, const char* message) 
+{
+        int index = (msgs->head + msgs->size) % MAX_MESSAGE_HISTORY;
+
+        if (msgs->size == MAX_MESSAGE_HISTORY) {
+                msgs->head = (msgs->head + 1) % MAX_MESSAGE_HISTORY;
+        } else {
+                msgs->size++;
+        }
+
+        strncpy(msgs->messages[index], message, MAX_BUFFER_SIZE - 1);
+        msgs->messages[index][MAX_BUFFER_SIZE - 1] = '\0';
+}
+
+// State
 typedef struct {
         // UI
         WINDOW *lainWin;
@@ -37,9 +79,12 @@ typedef struct {
         int socket;
         char* send_buffer;
         char* recv_buffer;
+
+        // Messages
+        Messages msgs;
 } State;
 
-static State* stateForSignals = NULL;
+static State* statep = NULL; // just a global pointer to the local state
 
 static void init(State* state);
 static void loop(State* state);
@@ -92,13 +137,14 @@ int main(int argc, char *argv[])
         }
 
         State state = { 0 };
-        stateForSignals = &state;
+        statep = &state;
 
         initConnection(argv[1], convertPort(argv[2]), argv[3], &state);
         if (pthread_create(&state.net_thread, NULL, handleConnection, &state) != 0) {
                 fprintf(stderr, RED "Error: Couldn't handle connection: pthread error\n" CRESET);
                 finish(0);
         }
+
         init(&state);
         loop(&state);
         finish(0);
@@ -134,6 +180,10 @@ static void init(State* state)
                 init_pair(7, COLOR_WHITE,   COLOR_BLACK);
         }
 
+        if (!initMessages(&state->msgs)) {
+                finish(0);
+        }
+
         drawUI(state);
 }
 
@@ -148,6 +198,7 @@ static void loop(State* state)
                                 state->insertMode = false;
                                 drawHelp(state->insertMode);
                                 curs_set(FALSE);
+                        } else if (ch == 13 || ch == KEY_ENTER) {
                         } else {
                                 form_driver(state->textForm, ch);
                         }
@@ -167,10 +218,11 @@ static void loop(State* state)
 
 static void finish(int sig)
 {
-        if (stateForSignals->send_buffer) free(stateForSignals->send_buffer);
-        if (stateForSignals->recv_buffer) free(stateForSignals->recv_buffer);
-        close(stateForSignals->socket);
-        deleteUi(stateForSignals);
+        destroyMessages(&statep->msgs);
+        if (statep->send_buffer) free(statep->send_buffer);
+        if (statep->recv_buffer) free(statep->recv_buffer);
+        close(statep->socket);
+        deleteUi(statep);
         endwin();
         exit(EXIT_SUCCESS);
 }
@@ -178,14 +230,14 @@ static void finish(int sig)
 static void resize(int sig)
 {
         curs_set(FALSE);
-        stateForSignals->insertMode = false;
+        statep->insertMode = false;
 
         endwin();            // End ncurses mode
         refresh();           // Refresh the screen
         clear();             // Clear the screen
 
-        deleteUi(stateForSignals);
-        drawUI(stateForSignals);
+        deleteUi(statep);
+        drawUI(statep);
 }
 
 static void printLain(WINDOW* win)
@@ -266,6 +318,9 @@ static void createTextForm(WINDOW *win, State* state)
         state->textField[0] = new_field(y - 2, x - 2, start_y + 1, start_x + 1, 0, 0);
         state->textField[1] = NULL;
         field_opts_off(state->textField[0], O_AUTOSKIP);
+        field_opts_on(state->textField[0], O_STATIC);
+        field_opts_on(state->textField[0], O_EDIT);
+        field_opts_on(state->textField[0], O_WRAP);
         state->textForm = new_form(state->textField);
         post_form(state->textForm);
         form_driver(state->textForm, REQ_INS_MODE);
