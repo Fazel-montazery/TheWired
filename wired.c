@@ -353,16 +353,12 @@ static void initConnection(const char* ip, unsigned short port, const char* name
 
 static bool sendMsg(State* state, const char* format, ...)
 {
-        char buffer[MAX_BUFFER_SIZE] = { 0 };
-
         va_list args;
         va_start(args, format);
-        int written = vsnprintf(buffer, MAX_BUFFER_SIZE, format, args);
+        vsnprintf(state->send_buffer, MAX_BUFFER_SIZE, format, args);
         va_end(args);
 
-        if (written >= MAX_BUFFER_SIZE) written -= 1;
-
-        int snd = send(state->socket, buffer, written, 0);
+        int snd = send(state->socket, state->send_buffer, strlen(state->send_buffer), 0);
         if (snd == -1) {
                 fprintf(stderr, RED "send error: %s\n" CRESET, strerror(errno));
                 return false;
@@ -390,6 +386,8 @@ static void* handleConnection(void* vargp)
                         fprintf(stderr, RED "Error Reciving message: errno=>%s\n" CRESET, strerror(errno));
                         finish(0);
                 }
+
+                if (rc >= MAX_BUFFER_SIZE) rc = MAX_BUFFER_SIZE - 1;
 
                 buffer[rc] = '\0';
 

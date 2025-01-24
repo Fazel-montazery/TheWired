@@ -149,7 +149,27 @@ static Result initServer(int* server_socket)
         return SUCCESS;
 }
 
-static bool acceptConnection(int server_socket, struct pollfd* fds, int* nfds) // Return false if exit condition else true
+static bool sendMsg(char* buffer, int socket, const char* format, ...)
+{
+        va_list args;
+        va_start(args, format);
+        vsnprintf(buffer, MAX_BUFFER_SIZE, format, args);
+        va_end(args);
+
+        int snd = send(socket, buffer, strlen(buffer), 0);
+        if (snd == -1) {
+                fprintf(stderr, RED "send error: %s\n" CRESET, strerror(errno));
+                return false;
+        }
+        return true;
+}
+
+static bool sendToAll(int fd, char* buffer)
+{
+        return true;
+}
+
+static bool acceptConnection(char* buffer, int server_socket, struct pollfd* fds, int* nfds) // Return false if exit condition else true
 {
         int new_socket;
         do {
@@ -162,8 +182,7 @@ static bool acceptConnection(int server_socket, struct pollfd* fds, int* nfds) /
                 }
 
                 if (*nfds > MAX_CLIENTS) { // Server is full
-                        const char* msg = SERVER_FULL_STRING;
-                        send(new_socket, msg, strlen(msg), 0);
+                        sendMsg(buffer, new_socket, SERVER_FULL_STRING);
                         close(new_socket);
                         printError("Server is full!\n");
                         return true;
@@ -184,11 +203,6 @@ static bool acceptConnection(int server_socket, struct pollfd* fds, int* nfds) /
                 *nfds += 1;
         } while (new_socket != -1);
 
-        return true;
-}
-
-static bool sendToAll(int fd, char* buffer)
-{
         return true;
 }
 
@@ -214,6 +228,8 @@ static bool handleConnection(int fd, char* buffer)
 
                 len = rc;
         } while (true);
+
+        if (len >= MAX_BUFFER_SIZE) len = MAX_BUFFER_SIZE - 1;
 
         buffer[len] = '\0';
 
@@ -265,7 +281,7 @@ int main(int argc, char** argv)
                         }
 
                         if (fds[i].fd == server_socket) { // the shit is a new connection
-                                if (!acceptConnection(server_socket, fds, &nfds)) {
+                                if (!acceptConnection(buffer, server_socket, fds, &nfds)) {
                                         result = ERROR_SERVER_ACCEPT;
                                         end_server = true;
                                         break;

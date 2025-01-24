@@ -12,8 +12,11 @@ main: ${src}
 server: server.c
 	gcc -o server.out server.c -O2 -Wall
 
+serverdbg: server.c
+	gcc -o server.out server.c -g3 -fsanitize=address -Wall -Wextra
+
 debug: ${src}
-	${cc} -o ${target} ${src} ${libs} -g3 -fsanitize=address -Wall
+	${cc} -o ${target} ${src} ${libs} -g3 -fsanitize=address -Wall -Wextra
 
 check:
 	valgrind --leak-check=yes ./${target}
