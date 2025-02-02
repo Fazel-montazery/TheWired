@@ -14,7 +14,9 @@
 
 #include "ansi_colors.h"
 
-#define MAX_MESSAGE_HISTORY 100
+#define CTRL(x) ((x) & 0x1f)
+
+#define MAX_MESSAGE_HISTORY 20
 #define MAX_BUFFER_SIZE 1024
 #define MAX_NAME_LEN 30
 
@@ -82,6 +84,7 @@ typedef struct {
 
         // Messages
         Messages msgs;
+        int msgMenuStart;
 } State;
 
 static State* statep = NULL; // just a global pointer to the local state
@@ -93,8 +96,10 @@ static void resize(int sig);
 static void printLain(WINDOW* win);
 static void drawUI(State* state);
 static void deleteUi(State* state);
+static char* getFieldText(FIELD* field);
 static void createTextForm(WINDOW *win, State* state);
 static void drawHelp(bool insertMode);
+static void drawMessages(State* state);
 static bool isValidNumber(const char *str);
 static unsigned short convertPort(const char *port_str);
 static void initConnection(const char* ip, unsigned short port, const char* name, State* state);
@@ -194,12 +199,33 @@ static void loop(State* state)
                 if (state->insertMode) {
                         if (ch == 127 || ch == KEY_BACKSPACE) {
                                 form_driver(state->textForm, REQ_DEL_PREV);
-                        } else if (ch == 27) { // ESC
+                        }
+                        else if (ch == 27) { // ESC
                                 state->insertMode = false;
                                 drawHelp(state->insertMode);
                                 curs_set(FALSE);
-                        } else if (ch == 13 || ch == KEY_ENTER) {
-                        } else {
+                        } 
+                        else if (ch == KEY_RIGHT) {
+                                form_driver(state->textForm, REQ_NEXT_CHAR);
+                        }
+                        else if (ch == KEY_LEFT) {
+                                form_driver(state->textForm, REQ_PREV_CHAR);
+                        }
+                        else if (ch == KEY_DOWN) {
+                                form_driver(state->textForm, REQ_NEXT_LINE);
+                        }
+                        else if (ch == KEY_UP) {
+                                form_driver(state->textForm, REQ_PREV_LINE);
+                        }
+                        else if (ch == CTRL('d')) {
+                                form_driver(state->textForm, REQ_CLR_FIELD);
+                        }
+                        else if (ch == 13 || ch == KEY_ENTER) {
+                                form_driver(state->textForm, REQ_VALIDATION);
+                                addMessage(&state->msgs, getFieldText(state->textField[0]));
+                                drawMessages(state);
+                        } 
+                        else {
                                 form_driver(state->textForm, ch);
                         }
                 } else {
@@ -209,8 +235,13 @@ static void loop(State* state)
                                 form_driver(state->textForm, REQ_NEXT_CHAR);
                                 form_driver(state->textForm, REQ_PREV_CHAR);
                                 curs_set(TRUE);
-                        } else if (ch == 'q' || ch == 'Q') {
+                        } 
+                        else if (ch == 'q' || ch == 'Q') {
                                 return; // End the program
+                        } 
+                        else if (ch == KEY_DOWN) {
+                        }
+                        else if (ch == KEY_UP) {
                         }
                 }
         }
@@ -238,6 +269,7 @@ static void resize(int sig)
 
         deleteUi(statep);
         drawUI(statep);
+        drawMessages(statep);
 }
 
 static void printLain(WINDOW* win)
@@ -284,8 +316,7 @@ static void drawUI(State* state)
         wrefresh(textWin);
 
         // MessageWindow
-        box(messageWin, 0, 0);
-        wrefresh(messageWin);
+        scrollok(messageWin, TRUE);
 
         drawHelp(state->insertMode);
 
@@ -307,6 +338,34 @@ static void deleteUi(State* state)
         unpost_form(state->textForm);
 	free_form(state->textForm);
 	free_field(state->textField[0]);
+}
+
+static char* trimWhitespaces(char *str) // from: https://gist.github.com/alan-mushi/c8a6f34d1df18574f643
+{
+	char *end;
+
+	// trim leading space
+	while(isspace(*str))
+		str++;
+
+	if(*str == 0) // all spaces?
+		return str;
+
+	// trim trailing space
+	end = str + strnlen(str, MAX_BUFFER_SIZE) - 1;
+
+	while(end > str && isspace(*end))
+		end--;
+
+	// write new null terminator
+	*(end+1) = '\0';
+
+	return str;
+}
+
+static char* getFieldText(FIELD* field)
+{
+        return trimWhitespaces(field_buffer(field, 0));
 }
 
 static void createTextForm(WINDOW *win, State* state)
@@ -335,11 +394,29 @@ static void drawHelp(bool insertMode)
 
         attron(COLOR_PAIR(4));
         if (insertMode) {
-                mvprintw(y, 2, "Enter: send message    Shift+Enter: newline    ESC: leave insert mode");
+                mvprintw(y, 2, "Enter: send message    ESC: leave insert mode    Ctrl+D: clear entire text field");
         } else {
                 mvprintw(y, 2, "i: enter insert mode    q: exit");
         }
         attroff(COLOR_PAIR(4));
+}
+
+static void drawMessages(State* state)
+{
+        wclear(state->messageWin);
+
+        int index = state->msgs.head;
+        int height = getmaxy(state->messageWin);
+        int width = getmaxx(state->messageWin);
+
+        int i;
+        for (i = 0; i < height && i < state->msgs.size; i++, index++) {
+                index %= MAX_MESSAGE_HISTORY;
+                wprintw(state->messageWin, "%s\n", state->msgs.messages[index]);
+                for (int x = 0; x < width; x++) wprintw(state->messageWin, "-");
+        }
+
+        wrefresh(state->messageWin);
 }
 
 // NET
