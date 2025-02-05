@@ -16,7 +16,7 @@
 
 #define CTRL(x) ((x) & 0x1f)
 
-#define MAX_MESSAGE_HISTORY 30
+#define MAX_MESSAGE_HISTORY 50
 #define MAX_BUFFER_SIZE 1024
 #define MAX_NAME_LEN 30
 
@@ -412,11 +412,10 @@ static void drawMessages(State* state)
         wclear(state->messageWin);
 
         int index = state->msgs.head;
-        int height = getmaxy(state->messageWin);
         int width = getmaxx(state->messageWin);
 
         int i;
-        for (i = 0; i < height && i < state->msgs.size; i++, index++) {
+        for (i = 0; i < state->msgs.size; i++, index++) {
                 index %= MAX_MESSAGE_HISTORY;
                 wprintw(state->messageWin, "%s\n", state->msgs.messages[index]);
                 for (int x = 0; x < width; x++) wprintw(state->messageWin, "-");
