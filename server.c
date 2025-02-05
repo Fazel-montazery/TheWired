@@ -2,6 +2,7 @@
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
 #include <sys/poll.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -198,6 +199,8 @@ static bool acceptConnection(char* buffer, int server_socket, struct pollfd* fds
 
                 printMsg("New connection on socket %d with name %s\n", new_socket, name);
 
+                int flags = fcntl(new_socket, F_GETFL, 0);
+                fcntl(new_socket, F_SETFL, flags | O_NONBLOCK);
                 fds[*nfds].fd = new_socket;
                 fds[*nfds].events = POLLIN;
                 *nfds += 1;
