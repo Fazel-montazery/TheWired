@@ -103,7 +103,7 @@ void printResult(Result s)
 } while(0)
 
 #define PORT 8080
-#define MAX_CLIENTS 1
+#define MAX_CLIENTS 3
 #define BACKLOG 10
 #define MAX_BUFFER_SIZE 1024
 #define MAX_NAME_LEN 30
@@ -165,9 +165,20 @@ static bool sendMsg(char* buffer, int socket, const char* format, ...)
         return true;
 }
 
-static bool sendToAll(int fd, char* buffer)
+static void sendToAll(int fd, int server_socket, struct pollfd* fds, int nfds, const char* msg)
 {
-        return true;
+        char buffer[MAX_BUFFER_SIZE] = { 0 };
+        for (int i = 0; i < nfds; i++) {
+                if (fds[i].fd == server_socket) {
+                        continue;
+                }
+
+                if (fds[i].fd == fd) {
+                        continue;
+                }
+        
+                sendMsg(buffer, fds[i].fd, msg);
+        }
 }
 
 static bool acceptConnection(char* buffer, int server_socket, struct pollfd* fds, int* nfds) // Return false if exit condition else true
@@ -209,7 +220,7 @@ static bool acceptConnection(char* buffer, int server_socket, struct pollfd* fds
         return true;
 }
 
-static bool handleConnection(int fd, char* buffer)
+static bool handleConnection(int fd, int server_socket, struct pollfd* fds, int nfds, char* buffer)
 {
         int rc = 0;
         int len = 0;
@@ -235,6 +246,8 @@ static bool handleConnection(int fd, char* buffer)
         if (len >= MAX_BUFFER_SIZE) len = MAX_BUFFER_SIZE - 1;
 
         buffer[len] = '\0';
+
+        sendToAll(fd, server_socket, fds, nfds, buffer);
 
         return true;
 }
@@ -290,7 +303,7 @@ int main(int argc, char** argv)
                                         break;
                                 }
                         } else {
-                                if (!handleConnection(fds[i].fd, buffer)) {
+                                if (!handleConnection(fds[i].fd, server_socket, fds, nfds, buffer)) {
                                         close(fds[i].fd);
                                         fds[i].fd = -1;
                                         compress_array = true;

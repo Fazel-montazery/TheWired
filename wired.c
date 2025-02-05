@@ -539,6 +539,7 @@ static void* handleConnection(void* vargp)
                 }
 
                 addMessage(&state->msgs, buffer);
+                drawMessages(state);
         }
 
         return NULL; //  Avoid warrning
