@@ -81,6 +81,7 @@ typedef struct {
         int socket;
         char* send_buffer;
         char* recv_buffer;
+        char* name;
 
         // Messages
         Messages msgs;
@@ -143,8 +144,9 @@ int main(int argc, char *argv[])
 
         State state = { 0 };
         statep = &state;
+        state.name = argv[3];
 
-        initConnection(argv[1], convertPort(argv[2]), argv[3], &state);
+        initConnection(argv[1], convertPort(argv[2]), state.name, &state);
         if (pthread_create(&state.net_thread, NULL, handleConnection, &state) != 0) {
                 fprintf(stderr, RED "Error: Couldn't handle connection: pthread error\n" CRESET);
                 finish(0);
@@ -222,8 +224,11 @@ static void loop(State* state)
                         }
                         else if (ch == 13 || ch == KEY_ENTER) {
                                 form_driver(state->textForm, REQ_VALIDATION);
-                                addMessage(&state->msgs, getFieldText(state->textField[0]));
-                                drawMessages(state);
+                                char* msg = getFieldText(state->textField[0]);
+                                if (sendMsg(state, "%s: %s", state->name, msg)) {
+                                        addMessage(&state->msgs, msg);
+                                        drawMessages(state);
+                                }
                         } 
                         else {
                                 form_driver(state->textForm, ch);
@@ -532,6 +537,8 @@ static void* handleConnection(void* vargp)
                         fprintf(stderr, RED "Server is full!\n" CRESET);
                         finish(0);
                 }
+
+                addMessage(&state->msgs, buffer);
         }
 
         return NULL; //  Avoid warrning
