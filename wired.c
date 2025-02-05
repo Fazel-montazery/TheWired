@@ -16,7 +16,7 @@
 
 #define CTRL(x) ((x) & 0x1f)
 
-#define MAX_MESSAGE_HISTORY 20
+#define MAX_MESSAGE_HISTORY 30
 #define MAX_BUFFER_SIZE 1024
 #define MAX_NAME_LEN 30
 
@@ -239,10 +239,6 @@ static void loop(State* state)
                         else if (ch == 'q' || ch == 'Q') {
                                 return; // End the program
                         } 
-                        else if (ch == KEY_DOWN) {
-                        }
-                        else if (ch == KEY_UP) {
-                        }
                 }
         }
 }
@@ -263,13 +259,22 @@ static void resize(int sig)
         curs_set(FALSE);
         statep->insertMode = false;
 
+        form_driver(statep->textForm, REQ_VALIDATION);
+
         endwin();            // End ncurses mode
         refresh();           // Refresh the screen
         clear();             // Clear the screen
 
+        char tmp[MAX_BUFFER_SIZE] = { 0 };
+        strncpy(tmp, field_buffer(statep->textField[0], 0), MAX_BUFFER_SIZE);
+        tmp[MAX_BUFFER_SIZE - 1] = '\0';
+        form_driver(statep->textForm, REQ_CLR_FIELD);
+
         deleteUi(statep);
         drawUI(statep);
         drawMessages(statep);
+        set_field_buffer(statep->textField[0], 0, tmp);
+        form_driver(statep->textForm, REQ_END_FIELD);
 }
 
 static void printLain(WINDOW* win)
@@ -380,6 +385,7 @@ static void createTextForm(WINDOW *win, State* state)
         field_opts_on(state->textField[0], O_STATIC);
         field_opts_on(state->textField[0], O_EDIT);
         field_opts_on(state->textField[0], O_WRAP);
+        set_max_field(state->textField[0], MAX_BUFFER_SIZE);
         state->textForm = new_form(state->textField);
         post_form(state->textForm);
         form_driver(state->textForm, REQ_INS_MODE);
