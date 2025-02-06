@@ -1,6 +1,5 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
-#include <sys/ioctl.h>
 #include <sys/poll.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -50,6 +49,8 @@ static void printMsg(const char* format, ...)
 typedef enum {
         SUCCESS = 0,
         ERROR_SERVER_SOCKET_CREATION,
+        ERROR_SERVER_SOCKET_FCNTL_GETFL,
+        ERROR_SERVER_SOCKET_FCNTL_SETFL,
         ERROR_SERVER_SOCKET_BINDING,
         ERROR_SERVER_SOCKET_LISTENING,
         ERROR_SERVER_ACCEPT,
@@ -63,6 +64,14 @@ void printResult(Result s)
 	switch (s) {
         case ERROR_SERVER_SOCKET_CREATION:
                 printError("Socket creation failed! => errno:%s\n", strerror(errno));
+                break;
+
+        case ERROR_SERVER_SOCKET_FCNTL_GETFL:
+                printError("Coudnl't retrive flags with fcntl()! => errno:%s\n", strerror(errno));
+                break;
+
+        case ERROR_SERVER_SOCKET_FCNTL_SETFL:
+                printError("Coudnl't set flags with fcntl()! => errno:%s\n", strerror(errno));
                 break;
 
         case ERROR_SERVER_SOCKET_BINDING:
@@ -103,7 +112,7 @@ void printResult(Result s)
 } while(0)
 
 #define PORT 8080
-#define MAX_CLIENTS 3
+#define MAX_CLIENTS 4
 #define BACKLOG 10
 #define MAX_BUFFER_SIZE 1024
 #define MAX_NAME_LEN 30
@@ -123,9 +132,16 @@ static Result initServer(int* server_socket)
                 return ERROR_SERVER_SOCKET_CREATION;
         }
 
-        if ((ioctl(sock, FIONBIO, (char *)&on)) == -1) {
+
+        int flags = fcntl(sock, F_GETFL, 0);
+        if (flags == -1) {
                 close(sock);
-                return ERROR_SERVER_SOCKET_CREATION;
+                return ERROR_SERVER_SOCKET_FCNTL_GETFL;
+        }
+
+        if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) == -1) {
+                close(sock);
+                return ERROR_SERVER_SOCKET_FCNTL_SETFL;
         }
 
         struct sockaddr_in addr = {
@@ -150,38 +166,45 @@ static Result initServer(int* server_socket)
         return SUCCESS;
 }
 
-static bool sendMsg(char* buffer, int socket, const char* format, ...)
+static bool sendMsg(char* send_buffer, int socket, const char* format, ...)
 {
         va_list args;
         va_start(args, format);
-        vsnprintf(buffer, MAX_BUFFER_SIZE, format, args);
+        vsnprintf(send_buffer, MAX_BUFFER_SIZE, format, args);
         va_end(args);
 
-        int snd = send(socket, buffer, strlen(buffer), 0);
+        int snd = send(socket, send_buffer, strlen(send_buffer), 0);
         if (snd == -1) {
-                fprintf(stderr, RED "send error: %s\n" CRESET, strerror(errno));
+                printError("send error: %s\n", strerror(errno));
                 return false;
         }
         return true;
 }
 
-static void sendToAll(int fd, int server_socket, struct pollfd* fds, int nfds, const char* msg)
+static void sendToAll(char* send_buffer, int client_socket, int server_socket, struct pollfd* fds, int nfds, const char* format, ...)
 {
-        char buffer[MAX_BUFFER_SIZE] = { 0 };
+        va_list args;
+        va_start(args, format);
+        vsnprintf(send_buffer, MAX_BUFFER_SIZE, format, args);
+        va_end(args);
+
+        int bufferlen = strlen(send_buffer);
+
         for (int i = 0; i < nfds; i++) {
                 if (fds[i].fd == server_socket) {
                         continue;
                 }
 
-                if (fds[i].fd == fd) {
+                if (fds[i].fd == client_socket) {
                         continue;
                 }
         
-                sendMsg(buffer, fds[i].fd, msg);
+                if (send(fds[i].fd, send_buffer, bufferlen, 0) == -1)
+                        printError("send error: %s\n", strerror(errno));
         }
 }
 
-static bool acceptConnection(char* buffer, int server_socket, struct pollfd* fds, int* nfds) // Return false if exit condition else true
+static bool acceptConnection(char* send_buffer, int server_socket, struct pollfd* fds, int* nfds) // Return false if exit condition else true
 {
         int new_socket;
         do {
@@ -194,7 +217,7 @@ static bool acceptConnection(char* buffer, int server_socket, struct pollfd* fds
                 }
 
                 if (*nfds > MAX_CLIENTS) { // Server is full
-                        sendMsg(buffer, new_socket, SERVER_FULL_STRING);
+                        sendMsg(send_buffer, new_socket, SERVER_FULL_STRING);
                         close(new_socket);
                         printError("Server is full!\n");
                         return true;
@@ -208,10 +231,21 @@ static bool acceptConnection(char* buffer, int server_socket, struct pollfd* fds
                 }
                 name[rc] = '\0';
 
+                int flags = fcntl(new_socket, F_GETFL, 0);
+                if (flags == -1) {
+                        printError("Coudnl't retrive flags for %d with fcntl()! => errno:%s\n", new_socket, strerror(errno));
+                        close(new_socket);
+                        return true;
+                }
+
+                if (fcntl(new_socket, F_SETFL, flags | O_NONBLOCK) == -1) {
+                        printError("Coudnl't set flags for %d with fcntl()! => errno:%s\n", new_socket, strerror(errno));
+                        close(new_socket);
+                        return true;
+                }
+
                 printMsg("New connection on socket %d with name %s\n", new_socket, name);
 
-                int flags = fcntl(new_socket, F_GETFL, 0);
-                fcntl(new_socket, F_SETFL, flags | O_NONBLOCK);
                 fds[*nfds].fd = new_socket;
                 fds[*nfds].events = POLLIN;
                 *nfds += 1;
@@ -220,23 +254,23 @@ static bool acceptConnection(char* buffer, int server_socket, struct pollfd* fds
         return true;
 }
 
-static bool handleConnection(int fd, int server_socket, struct pollfd* fds, int nfds, char* buffer)
+static bool handleConnection(char* send_buffer, char* recv_buffer, int client_socket, int server_socket, struct pollfd* fds, int nfds)
 {
         int rc = 0;
         int len = 0;
 
         do {
-                rc = recv(fd, buffer, MAX_BUFFER_SIZE, 0);
+                rc = recv(client_socket, recv_buffer, MAX_BUFFER_SIZE, 0);
                 if (rc < 0) {
-                        if (errno != EWOULDBLOCK) { // We are fucked
-                                printWarning("Connection %d closed => errno: %s\n", fd, strerror(errno));
+                        if (errno != EWOULDBLOCK) {
+                                printWarning("Connection %d closed => errno: %s\n", client_socket, strerror(errno));
                                 return false;
                         }
                         break;
                 }
 
                 if (rc == 0) {
-                        printWarning("Connection %d closed\n", fd);
+                        printWarning("Connection %d closed\n", client_socket);
                         return false; // connection closed
                 }
 
@@ -245,9 +279,9 @@ static bool handleConnection(int fd, int server_socket, struct pollfd* fds, int 
 
         if (len >= MAX_BUFFER_SIZE) len = MAX_BUFFER_SIZE - 1;
 
-        buffer[len] = '\0';
+        recv_buffer[len] = '\0';
 
-        sendToAll(fd, server_socket, fds, nfds, buffer);
+        sendToAll(send_buffer, client_socket, server_socket, fds, nfds, recv_buffer);
 
         return true;
 }
@@ -267,7 +301,8 @@ int main(int argc, char** argv)
         fds[0].fd = server_socket;
         fds[0].events = POLLIN;
 
-        char buffer[MAX_BUFFER_SIZE] = { 0 };
+        char send_buffer[MAX_BUFFER_SIZE] = { 0 };
+        char recv_buffer[MAX_BUFFER_SIZE] = { 0 };
 
         do {
                 int rc = poll(fds, nfds, timeout);
@@ -297,13 +332,13 @@ int main(int argc, char** argv)
                         }
 
                         if (fds[i].fd == server_socket) { // the shit is a new connection
-                                if (!acceptConnection(buffer, server_socket, fds, &nfds)) {
+                                if (!acceptConnection(send_buffer, server_socket, fds, &nfds)) {
                                         result = ERROR_SERVER_ACCEPT;
                                         end_server = true;
                                         break;
                                 }
                         } else {
-                                if (!handleConnection(fds[i].fd, server_socket, fds, nfds, buffer)) {
+                                if (!handleConnection(send_buffer, recv_buffer, fds[i].fd, server_socket, fds, nfds)) {
                                         close(fds[i].fd);
                                         fds[i].fd = -1;
                                         compress_array = true;
